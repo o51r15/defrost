@@ -1,0 +1,84 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'   # Triggers on tags like v0.1.0, v1.0.0 etc.
+
+permissions:
+  contents: write  # Needed to create releases and upload assets
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      # ---------------------------------------------------------------
+      # 1. Check out the code
+      # ---------------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------
+      # 2. Set up Python
+      # ---------------------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # ---------------------------------------------------------------
+      # 3. Install dependencies
+      # ---------------------------------------------------------------
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ---------------------------------------------------------------
+      # 4. Build portable bundle with PyInstaller
+      # ---------------------------------------------------------------
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller `
+            --onedir `
+            --windowed `
+            --name deFrost `
+            --uac-admin `
+            --add-data "src/templates;templates" `
+            --add-data "src/static;static" `
+            --paths src `
+            src/tray.py
+
+      # ---------------------------------------------------------------
+      # 5. Zip the output folder for distribution
+      # ---------------------------------------------------------------
+      - name: Zip build output
+        run: |
+          Compress-Archive `
+            -Path dist\deFrost\* `
+            -DestinationPath deFrost-${{ github.ref_name }}-windows.zip
+
+      # ---------------------------------------------------------------
+      # 6. Create GitHub release and upload the zip
+      # ---------------------------------------------------------------
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: deFrost ${{ github.ref_name }}
+          body: |
+            ## deFrost ${{ github.ref_name }}
+
+            ### Installation
+            1. Download and extract `deFrost-${{ github.ref_name }}-windows.zip`
+            2. Run `deFrost.exe` — accept the UAC prompt
+            3. On first activation, the ImDisk RAM disk driver will be installed automatically
+            4. Open `http://127.0.0.1:7375` in your browser if it does not open automatically
+
+            ### What's in this release
+            See [CHANGELOG.md](CHANGELOG.md) for details.
+
+            ### Requirements
+            - Windows 10 or Windows 11
+            - No Python installation required — everything is bundled
+          files: deFrost-${{ github.ref_name }}-windows.zip
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
