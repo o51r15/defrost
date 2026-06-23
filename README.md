@@ -88,6 +88,12 @@ When you deactivate, all changes sync back to disk and your profile is restored.
   - Chrome: typically 1–3 GB (varies by extensions and storage usage)
 - Administrator privileges (required for RAM disk creation and junction points)
 
+**ImDisk** is the RAM disk driver deFrost uses. You do not need to install it
+manually. On first activation, deFrost checks whether the ImDisk kernel driver
+service is present. If it is not, it installs it automatically using the
+elevation it already has. The driver persists as a Windows service after that
+and is not reinstalled on subsequent activations.
+
 ---
 
 ## Installation
@@ -168,20 +174,17 @@ src/
 │                    Session state with crash recovery detection.
 └── status_window.py Native tkinter floating progress window.
                      Survives browser termination. Shows live step-by-step log.
-
-assets/
-└── imdisk/
-    ├── imdisk.exe   ImDisk CLI tool
-    └── imdisk.sys   ImDisk kernel driver (auto-installed on first use)
 ```
 
 ---
 
 ## ImDisk Attribution
 
-deFrost bundles [ImDisk Virtual Disk Driver](http://www.ltr-data.se/opencode.html/#ImDisk)
-by Olof Lagerkvist, licensed under the GNU LGPL. The driver files (`imdisk.exe`,
-`imdisk.sys`) are included unchanged. Source code is available at the link above.
+deFrost uses [ImDisk Virtual Disk Driver](http://www.ltr-data.se/opencode.html/#ImDisk)
+by Olof Lagerkvist, licensed under the GNU LGPL, to create and manage the RAM
+disk. ImDisk is not bundled with deFrost — it is installed automatically on
+first use if not already present on the system. Source code is available at
+the link above.
 
 ---
 
