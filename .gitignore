@@ -22,6 +22,9 @@ build/
 config.json
 *.log
 
+# Developer log — local only
+DEVLOG.md
+
 # Test scripts
 test_*.py
 trace.py
