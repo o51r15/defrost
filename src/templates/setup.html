@@ -1,0 +1,418 @@
+{% extends "base.html" %}
+{% block title %} — Setup{% endblock %}
+
+{% block content %}
+
+<h5 class="text-white mb-4">Browser Protection Setup</h5>
+
+{% if is_active %}
+<div class="alert alert-warning">
+  Protection is currently active. Deactivate it before changing settings.
+</div>
+{% endif %}
+
+<!-- Browser selection -->
+<div class="mb-4">
+  <label class="form-label text-secondary small">BROWSER</label>
+  <select class="form-select bg-dark text-white border-secondary" id="browser-select"
+          onchange="loadProfiles()" {% if is_active %}disabled{% endif %}>
+    <option value="">— Select a browser —</option>
+    {% for bid, b in browsers.items() %}
+    <option value="{{ bid }}" {% if bid == current_browser %}selected{% endif %}>
+      {{ b.display_name }}
+    </option>
+    {% endfor %}
+  </select>
+</div>
+
+<!-- Profile selection (hidden until browser chosen) -->
+<div class="mb-4" id="profile-row" style="display:none">
+  <label class="form-label text-secondary small">PROFILE</label>
+  <select class="form-select bg-dark text-white border-secondary" id="profile-select"
+          onchange="updateSizeInfo()" {% if is_active %}disabled{% endif %}>
+    <option value="">— Select a profile —</option>
+  </select>
+</div>
+
+<!-- Profile size + RAM estimate -->
+<div class="mb-4" id="size-row" style="display:none">
+  <div class="info-card">
+    <div class="row g-2">
+      <div class="col-6">
+        <div class="info-label">Profile Size</div>
+        <div class="info-value" id="profile-size">—</div>
+        <div class="text-muted" style="font-size:0.7rem">excl. browser cache</div>
+      </div>
+      <div class="col-6">
+        <div class="info-label">Write Buffer</div>
+        <div class="info-value" id="display-buffer">200 MB</div>
+        <div class="text-muted" style="font-size:0.7rem">new writes during session</div>
+      </div>
+    </div>
+    <hr class="border-secondary my-2">
+    <div class="d-flex justify-content-between align-items-center">
+      <div>
+        <div class="info-label">Total RAM Required</div>
+        <div class="text-muted" style="font-size:0.7rem" id="ram-formula">profile + buffer + overhead</div>
+      </div>
+      <div class="info-value text-end" id="ram-required" style="font-size:1.3rem">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- Buffer size -->
+<div class="mb-4" id="buffer-row" style="display:none">
+  <label class="form-label text-secondary small">WRITE BUFFER SIZE</label>
+  <div class="d-flex gap-2 mb-2">
+    {% for label, val in [('Small — 100MB', 100), ('Recommended — 200MB', 200), ('Large — 500MB', 500)] %}
+    <button class="btn btn-sm buffer-btn {% if loop.index == 2 %}btn-primary active-buf{% else %}btn-outline-secondary{% endif %}"
+            data-val="{{ val }}" onclick="setBuffer(this, {{ val }})">
+      {{ label }}
+    </button>
+    {% endfor %}
+  </div>
+
+  <!-- Advanced: manual entry -->
+  <div>
+    <a href="#" class="text-secondary small" onclick="toggleAdvanced(event)">Advanced ▾</a>
+    <div id="advanced-panel" style="display:none" class="mt-2">
+      <div class="d-flex align-items-center gap-2">
+        <input type="number" class="form-control form-control-sm bg-dark text-white border-secondary"
+               style="width:120px" id="custom-buffer" placeholder="MB"
+               min="64" max="4096" oninput="setCustomBuffer(this.value)">
+        <span class="text-secondary small">MB (min 64, max 4096)</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Activate button -->
+<div id="activate-row" style="display:none" class="mt-4">
+  <button class="btn btn-primary btn-lg" id="btn-activate"
+          onclick="activate()" {% if is_active %}disabled{% endif %}>
+    Activate Protection
+  </button>
+  <div class="text-muted small mt-2" id="ram-warning" style="display:none">
+    ⚠️ Insufficient RAM for this configuration.
+  </div>
+</div>
+
+<!-- Rescan -->
+<div class="mt-5 border-top border-secondary pt-4">
+  <button class="btn btn-outline-secondary btn-sm" onclick="rescan()">
+    Re-detect Browsers
+  </button>
+</div>
+
+<div id="toast" class="toast-msg d-none"></div>
+
+<!-- Activation confirm modal -->
+<div id="confirm-modal" style="display:none; position:fixed; inset:0;
+     background:rgba(15,23,42,0.85); z-index:9998;
+     align-items:center; justify-content:center;">
+  <div style="background:#1e293b; border:1px solid #334155; border-radius:14px;
+              padding:2rem; max-width:400px; width:90%; text-align:center;">
+    <div style="font-size:2rem; margin-bottom:0.75rem;">🔄</div>
+    <div class="fw-bold text-white mb-2" style="font-size:1.1rem;">Restart browser to activate?</div>
+    <div class="text-secondary mb-4" style="font-size:0.9rem;" id="confirm-msg">
+      deFrost will close your browser, copy the profile to RAM, then relaunch it automatically.
+      Any unsaved work in the browser will be lost.
+    </div>
+    <div class="d-flex gap-3 justify-content-center">
+      <button class="btn btn-outline-secondary" onclick="closeConfirm()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmActivate()">Continue</button>
+    </div>
+  </div>
+</div>
+
+<!-- Activation progress overlay -->
+<div id="activation-overlay" style="display:none; position:fixed; inset:0;
+     background:rgba(15,23,42,0.96); z-index:9999;
+     flex-direction:column; align-items:center; justify-content:center;">
+  <div style="text-align:center; max-width:440px; padding:2rem;">
+    <div id="overlay-spinner" style="font-size:2.5rem; margin-bottom:1rem">⚙️</div>
+    <div id="overlay-title" class="text-white fw-bold mb-1" style="font-size:1.15rem;"></div>
+    <div id="overlay-sub" class="text-secondary mb-4" style="font-size:0.9rem;"></div>
+    <div class="d-flex justify-content-center gap-2 mb-3">
+      <span class="step-chip" id="step-close">① Closing browser</span>
+      <span class="step-chip" id="step-copy">② Copying profile</span>
+      <span class="step-chip" id="step-launch">③ Relaunching</span>
+    </div>
+    <!-- Live status log -->
+    <div id="overlay-log" style="
+      background:#0f172a; border:1px solid #1e293b; border-radius:8px;
+      padding:0.75rem 1rem; height:140px; overflow-y:auto;
+      text-align:left; font-size:0.8rem; color:#64748b;
+      font-family:monospace; margin-bottom:1rem;">
+    </div>
+    <div id="overlay-result" style="display:none">
+      <div id="result-icon" style="font-size:3rem; margin-bottom:0.5rem;"></div>
+      <div id="result-title" class="fw-bold mb-2" style="font-size:1.1rem;"></div>
+      <div id="result-detail" class="text-secondary mb-4" style="font-size:0.85rem; white-space:pre-wrap;"></div>
+      <div class="d-flex gap-2 justify-content-center">
+        <button class="btn btn-primary" id="btn-go-dash" style="display:none"
+                onclick="location.href='/'">Open Dashboard</button>
+        <button class="btn btn-outline-secondary" onclick="closeOverlay()">Back to Setup</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Hidden state -->
+<input type="hidden" id="selected-profile-path" value="">
+<input type="hidden" id="buffer-mb" value="{{ buffer_size }}">
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const browsersData = {{ browsers | tojson }};
+  let bufferMb = {{ buffer_size }};
+
+  function showToast(msg, ok=true) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast-msg ' + (ok ? 'toast-ok' : 'toast-err');
+    setTimeout(() => t.className = 'toast-msg d-none', 3500);
+  }
+
+  function loadProfiles() {
+    const bid = document.getElementById('browser-select').value;
+    const sel = document.getElementById('profile-select');
+    sel.innerHTML = '<option value="">— Select a profile —</option>';
+
+    document.getElementById('profile-row').style.display = bid ? '' : 'none';
+    document.getElementById('size-row').style.display = 'none';
+    document.getElementById('buffer-row').style.display = 'none';
+    document.getElementById('activate-row').style.display = 'none';
+
+    if (!bid) return;
+
+    fetch(`/api/profiles/${bid}`)
+      .then(r => r.json())
+      .then(d => {
+        d.profiles.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.textContent = `${p.display_name} (${p.size_mb} MB)`;
+          opt.dataset.path = p.path;
+          opt.dataset.size = p.size_mb;
+          sel.appendChild(opt);
+        });
+        if (d.profiles.length === 1) {
+          sel.selectedIndex = 1;
+          updateSizeInfo();
+        }
+      });
+  }
+
+  function updateSizeInfo() {
+    const sel = document.getElementById('profile-select');
+    const opt = sel.options[sel.selectedIndex];
+    if (!opt || !opt.dataset.path) return;
+
+    document.getElementById('selected-profile-path').value = opt.dataset.path;
+    const sizeMb = parseFloat(opt.dataset.size) || 0;
+    document.getElementById('profile-size').textContent = `${sizeMb} MB`;
+    document.getElementById('size-row').style.display = '';
+    document.getElementById('buffer-row').style.display = '';
+    document.getElementById('activate-row').style.display = '';
+    refreshRamCalc(sizeMb);
+  }
+
+  function refreshRamCalc(sizeMb) {
+    if (!sizeMb) sizeMb = parseFloat(document.getElementById('profile-size').textContent) || 0;
+    const overhead = 128;
+    const required = Math.ceil(sizeMb + bufferMb + overhead);
+    document.getElementById('ram-required').textContent = `${required} MB`;
+    document.getElementById('display-buffer').textContent = `${bufferMb} MB`;
+    document.getElementById('ram-formula').textContent =
+      `${sizeMb} MB profile  +  ${bufferMb} MB buffer  +  ${overhead} MB overhead`;
+
+    // Warn if profile is very large
+    const warning = document.getElementById('ram-warning');
+    if (required > 3000) {
+      warning.textContent = `⚠️ This profile needs ${required} MB of RAM. Make sure you have enough free memory.`;
+      warning.style.display = '';
+    } else {
+      warning.style.display = 'none';
+    }
+  }
+
+  function setBuffer(btn, val) {
+    bufferMb = val;
+    document.getElementById('buffer-mb').value = val;
+    document.querySelectorAll('.buffer-btn').forEach(b => {
+      b.className = b === btn
+        ? 'btn btn-sm btn-primary active-buf buffer-btn'
+        : 'btn btn-sm btn-outline-secondary buffer-btn';
+    });
+    refreshRamCalc();
+  }
+
+  function setCustomBuffer(val) {
+    const v = parseInt(val);
+    if (v >= 64 && v <= 4096) {
+      bufferMb = v;
+      document.getElementById('buffer-mb').value = v;
+      document.querySelectorAll('.buffer-btn').forEach(b => b.className = 'btn btn-sm btn-outline-secondary buffer-btn');
+      refreshRamCalc();
+    }
+  }
+
+  function toggleAdvanced(e) {
+    e.preventDefault();
+    const p = document.getElementById('advanced-panel');
+    p.style.display = p.style.display === 'none' ? '' : 'none';
+  }
+
+  function activate() {
+    const bid  = document.getElementById('browser-select').value;
+    const psel = document.getElementById('profile-select');
+    const pid  = psel.value;
+    const path = document.getElementById('selected-profile-path').value;
+
+    if (!bid || !pid || !path) {
+      showToast('Please select a browser and profile.', false);
+      return;
+    }
+
+    // Update confirm modal message with the browser name
+    const browserName = browsersData[bid]?.display_name || 'your browser';
+    document.getElementById('confirm-msg').textContent =
+      `deFrost will close ${browserName}, copy the profile to RAM, then relaunch it automatically. Any unsaved work in the browser will be lost.`;
+
+    const modal = document.getElementById('confirm-modal');
+    modal.style.display = 'flex';
+  }
+
+  function closeConfirm() {
+    document.getElementById('confirm-modal').style.display = 'none';
+  }
+
+  function confirmActivate() {
+    closeConfirm();
+    const bid     = document.getElementById('browser-select').value;
+    const pid     = document.getElementById('profile-select').value;
+    const path    = document.getElementById('selected-profile-path').value;
+    const buf     = parseInt(document.getElementById('buffer-mb').value) || 200;
+    const exePath = browsersData[bid]?.exe_path || '';
+
+    showOverlay();
+
+    // Start activation in background thread
+    fetch('/activate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({browser_id: bid, profile_id: pid,
+                            profile_path: path, buffer_mb: buf, exe_path: exePath}),
+    })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) { showResult(d); return; }
+      // Poll for live status updates
+      let lastCount = 0;
+      const poll = setInterval(() => {
+        fetch('/api/activation-status')
+          .then(r => r.json())
+          .then(s => {
+            // Append any new messages to the log
+            const newMsgs = s.messages.slice(lastCount);
+            newMsgs.forEach(m => appendLog(m));
+            lastCount = s.messages.length;
+
+            if (s.result) {
+              clearInterval(poll);
+              showResult(s.result);
+            }
+          })
+          .catch(() => clearInterval(poll));
+      }, 800);
+    })
+    .catch(e => showResult({ok: false, message: 'Network error: ' + e, step: 'unknown'}));
+  }
+
+  function showOverlay() {
+    const ol = document.getElementById('activation-overlay');
+    ol.style.display = 'flex';
+    document.getElementById('overlay-result').style.display = 'none';
+    document.getElementById('overlay-spinner').style.display = '';
+    document.getElementById('overlay-title').textContent = 'Activating protection...';
+    document.getElementById('overlay-sub').textContent = 'This may take a minute for large profiles.';
+    document.getElementById('overlay-log').innerHTML = '';
+    stepActive('step-close');
+    stepPending('step-copy');
+    stepPending('step-launch');
+  }
+
+  function appendLog(msg) {
+    const log = document.getElementById('overlay-log');
+    if (!log) return;
+    const line = document.createElement('div');
+    line.textContent = '› ' + msg;
+    line.style.marginBottom = '2px';
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+    // Advance step chips based on message content
+    const m = msg.toLowerCase();
+    if (m.includes('measuring') || m.includes('creating ram') || m.includes('copying'))
+      stepActive('step-copy');
+    if (m.includes('launching') || m.includes('junction created') || m.includes('protection active'))
+      stepActive('step-launch');
+  }
+
+  function closeOverlay() {
+    document.getElementById('activation-overlay').style.display = 'none';
+    document.getElementById('btn-activate').disabled = false;
+    document.getElementById('btn-activate').textContent = 'Activate Protection';
+  }
+
+  function showResult(d) {
+    document.getElementById('overlay-spinner').style.display = 'none';
+    document.getElementById('overlay-sub').textContent = '';
+    document.getElementById('overlay-result').style.display = '';
+
+    if (d.ok) {
+      stepDone('step-close'); stepDone('step-copy');
+      d.launched ? stepDone('step-launch') : stepFail('step-launch');
+      document.getElementById('result-icon').textContent = '🛡️';
+      document.getElementById('result-title').className = 'fw-bold mb-2 text-success';
+      document.getElementById('result-title').textContent = 'Protection Activated';
+      let detail = 'Your browser profile is now running in RAM.\nThe FROST timing channel is eliminated.';
+      if (!d.launched) detail += '\n\n⚠️ Browser could not relaunch automatically — please open it manually.';
+      document.getElementById('result-detail').textContent = detail;
+      document.getElementById('btn-go-dash').style.display = '';
+    } else {
+      const step = d.step || '';
+      if (step === 'close') stepFail('step-close');
+      else { stepDone('step-close'); }
+      if (step === 'activate') stepFail('step-copy');
+      document.getElementById('result-icon').textContent = '❌';
+      document.getElementById('result-title').className = 'fw-bold mb-2 text-danger';
+      document.getElementById('result-title').textContent = 'Activation Failed';
+      document.getElementById('result-detail').textContent =
+        (d.message || 'Unknown error') + (step ? `\n(failed at: ${step})` : '');
+      document.getElementById('btn-go-dash').style.display = 'none';
+      document.getElementById('overlay-title').textContent = 'Something went wrong';
+    }
+  }
+
+  function stepPending(id) { el(id).className = 'step-chip'; }
+  function stepActive(id)  { el(id).className = 'step-chip step-active'; }
+  function stepDone(id)    { el(id).className = 'step-chip step-done'; }
+  function stepFail(id)    { el(id).className = 'step-chip step-fail'; }
+  function el(id)          { return document.getElementById(id); }
+
+  function rescan() {
+    fetch('/rescan', {method:'POST'})
+      .then(r => r.json())
+      .then(d => { if (d.ok) location.reload(); });
+  }
+
+  // Restore last selection on load
+  window.addEventListener('DOMContentLoaded', () => {
+    const bid = document.getElementById('browser-select').value;
+    if (bid) loadProfiles();
+  });
+</script>
+{% endblock %}

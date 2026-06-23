@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% block title %} — Dashboard{% endblock %}
+
+{% block content %}
+
+<!-- Status indicator -->
+<div class="status-card mb-4 {% if is_active %}status-protected{% else %}status-unprotected{% endif %}">
+  <div class="d-flex align-items-center gap-3">
+    <div class="status-dot {% if is_active %}dot-blue{% else %}dot-gray{% endif %}"></div>
+    <div>
+      <div class="status-label">{{ 'PROTECTED' if is_active else 'UNPROTECTED' }}</div>
+      <div class="status-sub">
+        {% if is_active %}
+          Profile is running in RAM — SSD timing channel is eliminated
+        {% else %}
+          Profile is on disk — FROST attack surface is active
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if is_active %}
+<!-- Session info -->
+<div class="row g-3 mb-4">
+  <div class="col-md-6">
+    <div class="info-card">
+      <div class="info-label">Browser</div>
+      <div class="info-value">{{ session.browser | capitalize }}</div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="info-card">
+      <div class="info-label">Profile</div>
+      <div class="info-value">{{ session.profile_id }}</div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="info-card">
+      <div class="info-label">Activated</div>
+      <div class="info-value" style="font-size:0.95rem">
+        {{ session.activation_time[:19].replace('T',' ') if session.activation_time else '—' }}
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="info-card">
+      <div class="info-label">Last Sync</div>
+      <div class="info-value" id="last-sync" style="font-size:0.95rem">
+        {{ session.last_sync_time[:19].replace('T',' ') if session.last_sync_time else 'Not yet' }}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- RAM disk usage -->
+<div class="mb-4">
+  <div class="d-flex justify-content-between mb-1">
+    <span class="text-secondary small">RAM Disk</span>
+    <span class="text-secondary small" id="ram-label">
+      {{ ram_stats.used_mb }}MB / {{ ram_stats.total_mb }}MB
+    </span>
+  </div>
+  <div class="progress" style="height:10px; background:#1e293b">
+    <div class="progress-bar bg-blue" id="ram-bar"
+         role="progressbar"
+         style="width: {{ ram_stats.pct_used }}%">
+    </div>
+  </div>
+  <div class="d-flex justify-content-between mt-1">
+    <span class="text-muted" style="font-size:0.75rem">Profile + buffer</span>
+    <span class="text-muted" id="ram-free" style="font-size:0.75rem">
+      {{ ram_stats.free_mb }}MB free
+    </span>
+  </div>
+</div>
+
+<!-- Actions -->
+<div class="d-flex gap-3">
+  <button class="btn btn-outline-secondary" id="btn-sync" onclick="syncNow()">
+    Sync Now
+  </button>
+  <button class="btn btn-danger" onclick="startDeactivate()">
+    Deactivate Protection
+  </button>
+</div>
+
+{% else %}
+<div class="text-center py-5">
+  <p class="text-secondary mb-4">No browser profile is currently protected.</p>
+  <a href="/setup" class="btn btn-primary btn-lg">Set Up Protection</a>
+</div>
+{% endif %}
+
+<!-- Deactivation confirm modal -->
+<div id="deact-confirm" style="display:none; position:fixed; inset:0;
+     background:rgba(15,23,42,0.85); z-index:9998;
+     align-items:center; justify-content:center;">
+  <div style="background:#1e293b; border:1px solid #334155; border-radius:14px;
+              padding:2rem; max-width:400px; width:90%; text-align:center;">
+    <div style="font-size:2rem; margin-bottom:0.75rem;">🔄</div>
+    <div class="fw-bold text-white mb-2" style="font-size:1.1rem;">Deactivate protection?</div>
+    <div class="text-secondary mb-4" style="font-size:0.9rem;">
+      deFrost will close your browser, sync all changes back to disk, restore
+      the profile, and relaunch the browser normally.
+    </div>
+    <div class="d-flex gap-3 justify-content-center">
+      <button class="btn btn-outline-secondary" onclick="closeDeactConfirm()">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmDeactivate()">Deactivate</button>
+    </div>
+  </div>
+</div>
+
+<!-- Deactivation progress overlay -->
+<div id="deact-overlay" style="display:none; position:fixed; inset:0;
+     background:rgba(15,23,42,0.96); z-index:9999;
+     flex-direction:column; align-items:center; justify-content:center;">
+  <div style="text-align:center; max-width:440px; padding:2rem;">
+    <div id="deact-spinner" style="font-size:2.5rem; margin-bottom:1rem;">⚙️</div>
+    <div id="deact-title" class="text-white fw-bold mb-1" style="font-size:1.15rem;">Deactivating...</div>
+    <div id="deact-sub" class="text-secondary mb-3" style="font-size:0.9rem;">
+      Syncing your data back to disk before releasing RAM.
+    </div>
+    <div class="d-flex justify-content-center gap-2 mb-3">
+      <span class="step-chip" id="dstep-close">① Closing browser</span>
+      <span class="step-chip" id="dstep-sync">② Syncing to disk</span>
+      <span class="step-chip" id="dstep-launch">③ Relaunching</span>
+    </div>
+    <div id="deact-log" style="
+      background:#0f172a; border:1px solid #1e293b; border-radius:8px;
+      padding:0.75rem 1rem; height:140px; overflow-y:auto;
+      text-align:left; font-size:0.8rem; color:#64748b;
+      font-family:monospace; margin-bottom:1rem;">
+    </div>
+    <div id="deact-result" style="display:none">
+      <div id="deact-result-icon" style="font-size:3rem; margin-bottom:0.5rem;"></div>
+      <div id="deact-result-title" class="fw-bold mb-2" style="font-size:1.1rem;"></div>
+      <div id="deact-result-detail" class="text-secondary mb-4" style="font-size:0.85rem; white-space:pre-wrap;"></div>
+      <div class="d-flex gap-2 justify-content-center">
+        <button class="btn btn-primary" id="deact-btn-done"
+                onclick="location.reload()">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast-msg d-none"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function showToast(msg, ok=true) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast-msg ' + (ok ? 'toast-ok' : 'toast-err');
+    setTimeout(() => t.className = 'toast-msg d-none', 3500);
+  }
+
+  function syncNow() {
+    document.getElementById('btn-sync').disabled = true;
+    fetch('/sync', {method:'POST'})
+      .then(r => r.json())
+      .then(d => {
+        showToast(d.message, d.ok);
+        document.getElementById('btn-sync').disabled = false;
+      });
+  }
+
+  // --- Deactivation flow ---
+  function startDeactivate() {
+    document.getElementById('deact-confirm').style.display = 'flex';
+  }
+
+  function closeDeactConfirm() {
+    document.getElementById('deact-confirm').style.display = 'none';
+  }
+
+  function confirmDeactivate() {
+    closeDeactConfirm();
+    showDeactOverlay();
+
+    fetch('/deactivate', {method: 'POST'})
+      .then(r => r.json())
+      .then(d => {
+        if (!d.ok) { showDeactResult(d); return; }
+        let lastCount = 0;
+        const poll = setInterval(() => {
+          fetch('/api/deactivation-status')
+            .then(r => r.json())
+            .then(s => {
+              s.messages.slice(lastCount).forEach(m => appendDeactLog(m));
+              lastCount = s.messages.length;
+              if (s.result) {
+                clearInterval(poll);
+                showDeactResult(s.result);
+              }
+            })
+            .catch(() => clearInterval(poll));
+        }, 800);
+      });
+  }
+
+  function showDeactOverlay() {
+    document.getElementById('deact-overlay').style.display = 'flex';
+    document.getElementById('deact-result').style.display = 'none';
+    document.getElementById('deact-spinner').style.display = '';
+    document.getElementById('deact-log').innerHTML = '';
+    stepChip('dstep-close', 'active');
+    stepChip('dstep-sync',  'pending');
+    stepChip('dstep-launch','pending');
+  }
+
+  function appendDeactLog(msg) {
+    const log = document.getElementById('deact-log');
+    const line = document.createElement('div');
+    line.textContent = '› ' + msg;
+    line.style.marginBottom = '2px';
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+    const m = msg.toLowerCase();
+    if (m.includes('sync') || m.includes('restoring') || m.includes('junction') || m.includes('releasing'))
+      stepChip('dstep-sync', 'active');
+    if (m.includes('relaunch') || m.includes('deactivation complete'))
+      stepChip('dstep-launch', 'active');
+  }
+
+  function showDeactResult(d) {
+    document.getElementById('deact-spinner').style.display = 'none';
+    document.getElementById('deact-result').style.display = '';
+    if (d.ok) {
+      stepChip('dstep-close', 'done');
+      stepChip('dstep-sync', 'done');
+      d.launched ? stepChip('dstep-launch', 'done') : stepChip('dstep-launch', 'fail');
+      document.getElementById('deact-result-icon').textContent = '✅';
+      document.getElementById('deact-result-title').className = 'fw-bold mb-2 text-success';
+      document.getElementById('deact-result-title').textContent = 'Protection Deactivated';
+      let detail = 'Your profile has been synced back to disk.\nYour browser is running normally.';
+      if (!d.launched) detail += '\n\n⚠️ Browser could not relaunch automatically — please open it manually.';
+      document.getElementById('deact-result-detail').textContent = detail;
+      document.getElementById('deact-title').textContent = 'Deactivation complete';
+    } else {
+      document.getElementById('deact-result-icon').textContent = '❌';
+      document.getElementById('deact-result-title').className = 'fw-bold mb-2 text-danger';
+      document.getElementById('deact-result-title').textContent = 'Deactivation Failed';
+      document.getElementById('deact-result-detail').textContent = d.message || 'Unknown error';
+      document.getElementById('deact-title').textContent = 'Something went wrong';
+    }
+  }
+
+  function stepChip(id, state) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = 'step-chip' + (state !== 'pending' ? ' step-' + state : '');
+  }
+
+  // Poll status every 5 seconds to refresh RAM stats
+  setInterval(() => {
+    fetch('/api/status')
+      .then(r => r.json())
+      .then(d => {
+        if (!d.is_active) return;
+        const s = d.ram_stats;
+        const g = id => document.getElementById(id);
+        if (g('ram-label')) g('ram-label').textContent = `${s.used_mb}MB / ${s.total_mb}MB`;
+        if (g('ram-bar'))   g('ram-bar').style.width   = `${s.pct_used}%`;
+        if (g('ram-free'))  g('ram-free').textContent  = `${s.free_mb}MB free`;
+        const sync = d.session.last_sync_time;
+        if (g('last-sync') && sync) g('last-sync').textContent = sync.slice(0,19).replace('T',' ');
+      });
+  }, 5000);
+</script>
+{% endblock %}
